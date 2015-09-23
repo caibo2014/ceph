@@ -1317,6 +1317,10 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
     if (r < 0 )
       return r;
 
+    r = ::lseek(fd, body_offset, SEEK_SET);
+    if (r < 0 )
+      return r;
+
     // write diff
     int snap_count = snaps.size();
     for (int i = 0; i < snap_count - 1; ++i) {
