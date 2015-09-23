@@ -1263,6 +1263,8 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
       if (r < 0)
         return r;
       image.snap_set(snaps.front().name.c_str());
+      if (r < 0)
+        return r;
       for (std::vector<librbd::snap_info_t>::iterator it = snaps.begin();
        it != snaps.end(); ++it) {
         tag = 's';
@@ -1313,6 +1315,17 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
     r = b_bl.write_fd(fd);
     if (r < 0 )
       return r;
+
+    // write diff
+    int snap_count = snaps.size();
+    for (int i = 0; i < snap_count - 1; ++i) {
+      string fromsnapname = snaps[i];
+      string endsnapname = snaps[i+1];
+      r = do_export_diff(image, pc, info, fromsnapname.c_str(),
+                     endsnapname.c_str(), false, fd);
+      if (r < 0)
+        goto done;
+    }
   }
 
   if (!to_stdout) {
@@ -1322,12 +1335,13 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
     close(fd);
   }
 
-  if (r < 0) {
-    pc.fail();
-  } else {
-    pc.finish();
-  }
-  return r;
+ done:
+   if (r < 0) {
+     pc.fail();
+   } else {
+     pc.finish();
+   }
+   return r;
 }
 
 class C_ExportDiff {
