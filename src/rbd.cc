@@ -1921,6 +1921,7 @@ static int do_import_diff(librbd::Image &image, MyProgressContext &pc, int fd,
   int r;
   uint64_t off = 0;
   string from, to;
+  bool from_stdin = (fd == STDIN_FILENO);
   char buf[strlen(RBD_DIFF_BANNER) + 1];
   r = safe_read_exact(fd, buf, strlen(RBD_DIFF_BANNER));
   if (r < 0)
