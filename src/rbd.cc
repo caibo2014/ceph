@@ -88,9 +88,10 @@ static std::map<uint64_t, std::string> feature_mapping =
     RBD_FEATURE_FAST_DIFF, "fast-diff")(
     RBD_FEATURE_DEEP_FLATTEN, "deep-flatten");
 
+struct MyProgressContext;
 static int read_string(int fd, unsigned max, string *out);
 static int do_import_diff(librbd::Image &image, MyProgressContext &pc, int fd,
-                          int size);
+                          uint64_t size);
 
 void usage()
 {
@@ -1915,7 +1916,7 @@ static int read_string(int fd, unsigned max, string *out)
 }
 
 static int do_import_diff(librbd::Image &image, MyProgressContext &pc, int fd,
-                          int size);
+                          uint64_t size);
 {
   int r;
   uint64_t off = 0;
