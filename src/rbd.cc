@@ -1887,8 +1887,7 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
         goto done;
       }
       if (v_size > 1) {
-        for (std::vector<librbd::snap_info_t>::iterator it = snapnames.begin() + 1;
-         it != snapnames.end(); ++it) {
+        for (int i = 1; i < v_size; ++i) {
           r = do_import(image, pc, fd, size);
           if (r < 0)
             goto done;
