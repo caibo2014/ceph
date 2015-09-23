@@ -1262,6 +1262,7 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
       r = image.snap_list(snaps);
       if (r < 0)
         return r;
+      image.snap_set(snaps.front().c_str());
       for (std::vector<librbd::snap_info_t>::iterator it = snaps.begin();
        it != snaps.end(); ++it) {
         tag = 's';
