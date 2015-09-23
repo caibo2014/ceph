@@ -2061,7 +2061,7 @@ static int do_import_diff(librbd::Image &image, const char *path)
     size = (uint64_t)stat_buf.st_size;
   }
 
-  r = import_diff(image, pc, fd, size);
+  r = do_import_diff(image, pc, fd, size);
 
  done:
   if (r < 0)
