@@ -1231,7 +1231,7 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
   int64_t m_body_offset = 0;
   if (with_snap) {
     __u8 tag;
-    string snapname(image.snap_get()) ;
+    string snapname(image.snap_get());
     bufferlist bl;
     bufferlist banner;
     banner.append(RBD_WITH_SNAP_BANNER, strlen(RBD_WITH_SNAP_BANNER));
@@ -1289,9 +1289,10 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
   r = throttle.wait_for_ret();
 
   if (with_snap) {
-    body_offset = ::lseek(fd, 0, SEEK_CUR);
-    if (body_offset < 0)
-      return body_offset;
+    r = ::lseek(fd, 0, SEEK_CUR);
+    if (r < 0)
+      return r;
+    body_offset = r;
     __u8 tag = 'b';
     bufferlist b_bl;
     ::encode(tag, b_bl);
@@ -1661,6 +1662,30 @@ private:
   uint64_t m_offset;
 };
 
+static int read_string(int fd, unsigned max, string *out)
+{
+  char buf[4];
+
+  int r = safe_read_exact(fd, buf, 4);
+  if (r < 0)
+    return r;
+
+  bufferlist bl;
+  bl.append(buf, 4);
+  bufferlist::iterator p = bl.begin();
+  uint32_t len;
+  ::decode(len, p);
+  if (len > max)
+    return -EINVAL;
+
+  char sbuf[len];
+  r = safe_read_exact(fd, sbuf, len);
+  if (r < 0)
+    return r;
+  out->assign(sbuf, len);
+  return len;
+}
+
 static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
 		     const char *imgname, int *order, const char *path,
 		     int format, uint64_t features, uint64_t size,
@@ -1879,30 +1904,6 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
  done2:
   delete[] p;
   return r;
-}
-
-static int read_string(int fd, unsigned max, string *out)
-{
-  char buf[4];
-
-  int r = safe_read_exact(fd, buf, 4);
-  if (r < 0)
-    return r;
-
-  bufferlist bl;
-  bl.append(buf, 4);
-  bufferlist::iterator p = bl.begin();
-  uint32_t len;
-  ::decode(len, p);
-  if (len > max)
-    return -EINVAL;
-
-  char sbuf[len];
-  r = safe_read_exact(fd, sbuf, len);
-  if (r < 0)
-    return r;
-  out->assign(sbuf, len);
-  return len;
 }
 
 static int do_import_diff(librbd::Image &image,  MyProgressContext &pc, int fd,
