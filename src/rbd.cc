@@ -1286,8 +1286,9 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
       return r;
   }
 
-  MyProgressContext pc("Exporting image");
-
+  ExportContext ec(&image, fd, info.size,
+                   g_conf->rbd_concurrent_management_ops);
+  MyProgressContext& pc = ec.pc;
   SimpleThrottle throttle(max_concurrent_ops, false);
   uint64_t period = image.get_stripe_count() * (1ull << info.order);
   for (uint64_t offset = 0; offset < info.size; offset += period) {
@@ -1321,7 +1322,7 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
     for (int i = 0; i < snap_count - 1; ++i) {
       string fromsnapname = snaps[i].name;
       string endsnapname = snaps[i+1].name;
-      r = do_export_diff(image, pc, info, fromsnapname.c_str(),
+      r = do_export_diff(image, ec, info, fromsnapname.c_str(),
                      endsnapname.c_str(), false, fd);
       if (r < 0)
         goto done;
