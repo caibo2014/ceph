@@ -1796,7 +1796,7 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
       if (r < 0)
 	    goto done;
       snapnames.push_back(snapname);
-    }else if (tag == 'b') {
+    } else if (tag == 'b') {
       char buf[8];
       r = safe_read_exact(fd, buf, 8);
       if (r < 0)
@@ -1805,8 +1805,13 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
       bl.append(buf, 8);
       bufferlist::iterator p = bl.begin();
       ::decode(body_offset, p);
-    }else if (tag == 'e') {
+    } else if (tag == 'e') {
       break;
+    } else {
+      cerr << "unrecognized tag byte " << (int)tag << " in stream; aborting"
+           << std::endl;
+      r = -EINVAL;
+      goto done;
     }
   }
 
@@ -1877,7 +1882,7 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
     int v_size = snapnames.size();
     if (v_size > 0) {
       // create the base snap
-      r = image.snap_create(snapnames.front());
+      r = image.snap_create(snapnames.front().c_str());
       if (r < 0) {
         goto done;
       }
