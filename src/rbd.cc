@@ -1261,24 +1261,19 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
        it != snaps.end(); ++it) {
         tag = 's';
         ::encode(tag, bl);
-        ::encode(it->name, bl);
+        string s(it->name);
+        ::encode(s, bl);
       }
-      r = bl.write_fd(fd);
     } else {
       tag = 's';
       ::encode(tag, bl);
       string s(snapname);
       ::encode(s, bl);
-      r = bl.write_fd(fd);
     }
 
-    if (r < 0)
-      return r;
-
     tag = 'e';
-    bufferlist end_bl;
-    ::encode(tag, end_bl);
-    r = end_bl.write_fd(fd);
+    ::encode(tag, bl);
+    r = bl.write_fd(fd);
     if (r <0)
       return r;
   }
