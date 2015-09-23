@@ -1319,8 +1319,8 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
     // write diff
     int snap_count = snaps.size();
     for (int i = 0; i < snap_count - 1; ++i) {
-      string fromsnapname = snaps[i];
-      string endsnapname = snaps[i+1];
+      string fromsnapname = snaps[i].name;
+      string endsnapname = snaps[i+1].name;
       r = do_export_diff(image, pc, info, fromsnapname.c_str(),
                      endsnapname.c_str(), false, fd);
       if (r < 0)
