@@ -1916,7 +1916,7 @@ static int read_string(int fd, unsigned max, string *out)
 }
 
 static int do_import_diff(librbd::Image &image, MyProgressContext &pc, int fd,
-                          uint64_t size);
+                          uint64_t size)
 {
   int r;
   uint64_t off = 0;
