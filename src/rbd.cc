@@ -1888,7 +1888,7 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
       }
       if (v_size > 1) {
         for (int i = 1; i < v_size; ++i) {
-          r = do_import(image, pc, fd, size);
+          r = do_import_diff(image, pc, fd, size);
           if (r < 0)
             goto done;
         }
@@ -1910,7 +1910,7 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
   return r;
 }
 
-static int do_import_diff(librbd::Image &image,  MyProgressContext &pc, int fd,
+static int do_import_diff(librbd::Image &image, MyProgressContext &pc, int fd,
                           int size);
 {
   int r;
