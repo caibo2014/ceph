@@ -1268,12 +1268,10 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
       ::encode(tag, bl);
       string s(snapname);
       ::encode(s, bl);
-
-      r = bl.write_fd(fd);
-      if (r < 0) {
-        return r;
-      }
     }
+    r = bl.write_fd(fd);
+    if (r < 0)
+      return r;
 
     tag = 'e';
     bufferlist end_bl;
