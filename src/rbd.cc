@@ -89,9 +89,14 @@ static std::map<uint64_t, std::string> feature_mapping =
     RBD_FEATURE_DEEP_FLATTEN, "deep-flatten");
 
 struct MyProgressContext;
+struct ExportContext;
 static int read_string(int fd, unsigned max, string *out);
 static int do_import_diff(librbd::Image &image, MyProgressContext &pc, int fd,
                           uint64_t size);
+static int do_export_diff(librbd::Image& image, ExportContext& ec,
+                          librbd::image_info_t& info, const char *fromsnapname,
+                          const char *endsnapname, bool whole_object,
+                          int fd)
 
 void usage()
 {
@@ -1234,6 +1239,7 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
   // body offset, we will get it after body write is over
   uint64_t body_offset = 1;
   int64_t m_body_offset = 0;
+  std::vector<librbd::snap_info_t> snaps;
   if (with_snap) {
     __u8 tag;
     string snapname(image.snap_get());
@@ -1253,7 +1259,6 @@ static int do_export(librbd::Image& image, const char *path, bool with_snap)
     ::encode(body_offset, bl);
     if (snapname.empty()) {
       // when no snapname specified, we may export all snap info and objects
-      std::vector<librbd::snap_info_t> snaps;
       r = image.snap_list(snaps);
       if (r < 0)
         return r;
@@ -1414,33 +1419,13 @@ private:
   }
 };
 
-static int do_export_diff(librbd::Image& image, const char *fromsnapname,
-			  const char *endsnapname, bool whole_object,
-			  const char *path)
+static int do_export_diff(librbd::Image& image, ExportContext& ec,
+                          librbd::image_info_t& info, const char *fromsnapname,
+                          const char *endsnapname, bool whole_object,
+                          int fd)
 {
-  int r;
-  librbd::image_info_t info;
-  int fd;
-
-  r = image.stat(info, sizeof(info));
-  if (r < 0)
-    return r;
-
-  if (strcmp(path, "-") == 0)
-    fd = 1;
-  else
-    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
-  if (fd < 0)
-    return -errno;
-
-  BOOST_SCOPE_EXIT((&r) (&fd) (&path)) {
-    close(fd);
-    if (r < 0 && fd != 1) {
-      remove(path);
-    }
-  } BOOST_SCOPE_EXIT_END
-
-  {
+   int r;
+   {
     // header
     bufferlist bl;
     bl.append(RBD_DIFF_BANNER, strlen(RBD_DIFF_BANNER));
@@ -1470,18 +1455,15 @@ static int do_export_diff(librbd::Image& image, const char *fromsnapname,
       return r;
     }
   }
-
-  ExportContext ec(&image, fd, info.size,
-                   g_conf->rbd_concurrent_management_ops);
   r = image.diff_iterate2(fromsnapname, 0, info.size, true, whole_object,
                           &C_ExportDiff::export_diff_cb, (void *)&ec);
   if (r < 0) {
-    goto out;
+    return r;
   }
 
   r = ec.throttle.wait_for_ret();
   if (r < 0) {
-    goto out;
+    return r;
   }
 
   {
@@ -1490,6 +1472,40 @@ static int do_export_diff(librbd::Image& image, const char *fromsnapname,
     ::encode(tag, bl);
     r = bl.write_fd(fd);
   }
+
+  return r;
+}
+
+
+static int do_export_diff(librbd::Image& image, const char *fromsnapname,
+			  const char *endsnapname, bool whole_object,
+			  const char *path)
+{
+  int r;
+  librbd::image_info_t info;
+  int fd;
+
+  r = image.stat(info, sizeof(info));
+  if (r < 0)
+    return r;
+
+  if (strcmp(path, "-") == 0)
+    fd = 1;
+  else
+    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+  if (fd < 0)
+    return -errno;
+
+  BOOST_SCOPE_EXIT((&r) (&fd) (&path)) {
+    close(fd);
+    if (r < 0 && fd != 1) {
+      remove(path);
+    }
+  } BOOST_SCOPE_EXIT_END
+
+  ExportContext ec(&image, fd, info.size,
+                   g_conf->rbd_concurrent_management_ops);
+  r = do_export_diff(image, ec, info, fromsnapname, endsnapname, whole_object, fd);
 
  out:
   if (r < 0)
