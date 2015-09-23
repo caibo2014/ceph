@@ -66,6 +66,8 @@
 #define MAX_POOL_NAME_SIZE 128
 
 #define RBD_DIFF_BANNER "rbd diff v1\n"
+#define RBD_WITH_SNAP_BANNER "rbd export\n"
+
 
 static string dir_oid = RBD_DIRECTORY;
 static string dir_info_oid = RBD_INFO;
@@ -779,9 +781,9 @@ static int do_purge_snaps(librbd::Image& image)
     return r;
   } else if (0 == snaps.size()) {
     return 0;
-  } else {  
+  } else {
     for (size_t i = 0; i < snaps.size(); ++i) {
-      r = image.snap_is_protected(snaps[i].name.c_str(), &is_protected);      
+      r = image.snap_is_protected(snaps[i].name.c_str(), &is_protected);
       if (r < 0) {
         pc.fail();
         return r;
@@ -1202,7 +1204,7 @@ private:
   int m_fd;
 };
 
-static int do_export(librbd::Image& image, const char *path)
+static int do_export(librbd::Image& image, const char *path, bool with_snap)
 {
   librbd::image_info_t info;
   int64_t r = image.stat(info, sizeof(info));
@@ -1224,6 +1226,56 @@ static int do_export(librbd::Image& image, const char *path)
     posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
   }
 
+  // body offset, we will get it after body write is over
+  uint64_t body_offset = 1;
+  int64_t m_body_offset = 0;
+  if (with_snap) {
+    __u8 tag;
+    string snapname(image.snap_get()) ;
+    bufferlist bl;
+    bufferlist banner;
+    banner.append(RBD_WITH_SNAP_BANNER, strlen(RBD_WITH_SNAP_BANNER));
+    r = banner.write_fd(fd);
+    if (r < 0) {
+      return r;
+    }
+    m_body_offset = ::lseek(fd, 0, SEEK_CUR);
+    if (m_body_offset < 0) {
+      return m_body_offset;
+    }
+    tag = 'b';
+    ::encode(tag, bl);
+    ::encode(body_offset, bl);
+    if (snapname.empty()) {
+      // when no snapname specified, we may export all snap info and objects
+      std::vector<librbd::snap_info_t> snaps;
+      r = image.snap_list(snaps);
+      if (r < 0)
+        return r;
+      for (std::vector<librbd::snap_info_t>::iterator it = snaps.begin();
+       it != snaps.end(); ++it) {
+        tag = 's';
+        ::encode(tag, bl);
+        ::encode(it->name, bl);
+      }
+    } else {
+      tag = 's';
+      ::encode(tag, bl);
+      string s(snapname);
+      ::encode(s, bl);
+
+      r = bl.write_fd(fd);
+      if (r < 0) {
+        return r;
+      }
+    }
+
+    tag = 'e';
+    bufferlist end_bl;
+    ::encode(tag, end_bl);
+    r = end_bl.write_fd(fd);
+  }
+
   MyProgressContext pc("Exporting image");
 
   SimpleThrottle throttle(max_concurrent_ops, false);
@@ -1235,6 +1287,25 @@ static int do_export(librbd::Image& image, const char *path)
   }
 
   r = throttle.wait_for_ret();
+
+  if (with_snap) {
+    body_offset = ::lseek(fd, 0, SEEK_CUR);
+    if (body_offset < 0)
+      return body_offset;
+    __u8 tag = 'b';
+    bufferlist b_bl;
+    ::encode(tag, b_bl);
+    ::encode(body_offset, b_bl);
+
+    r = ::lseek(fd, m_body_offset, SEEK_SET);
+    if (r < 0 )
+      return r;
+
+    r = b_bl.write_fd(fd);
+    if (r < 0 )
+      return r;
+  }
+
   if (!to_stdout) {
     if (r >= 0) {
       r = ftruncate(fd, info.size);
@@ -1514,7 +1585,7 @@ static void update_snap_name(char *imgname, char **snap)
     *snap = s;
 }
 
-static void set_pool_image_name(const char *orig_img, char **new_pool, 
+static void set_pool_image_name(const char *orig_img, char **new_pool,
 				char **new_img, char **snap)
 {
   const char *sep;
@@ -1613,6 +1684,11 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
   ssize_t readlen;		// amount received from one read
   size_t blklen = 0;		// amount accumulated from reads to fill blk
   librbd::Image image;
+  bool with_snap = true;
+  __u64 offset;
+  vector<string> snapnames;
+  uint64_t body_offset = 0;
+
 
   boost::scoped_ptr<SimpleThrottle> throttle;
   bool from_stdin = !strcmp(path, "-");
@@ -1620,6 +1696,7 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
     throttle.reset(new SimpleThrottle(1, false));
     fd = 0;
     size = 1ULL << *order;
+    with_snap = false;
   } else {
     throttle.reset(new SimpleThrottle(
       max(g_conf->rbd_concurrent_management_ops, 1), false));
@@ -1653,6 +1730,20 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
       size = (uint64_t) bdev_size;
     }
 
+    char buf[strlen(RBD_WITH_SNAP_BANNER) + 1];
+    r = safe_read_exact(fd, buf, strlen(RBD_WITH_SNAP_BANNER));
+    if (r < 0)
+      goto done;
+    buf[strlen(RBD_WITH_SNAP_BANNER)] = '\0';
+    if (!strcmp(buf, RBD_WITH_SNAP_BANNER)) {
+      with_snap = false;
+      r = ::lseek(fd, 0, SEEK_SET);
+      if (r < 0)
+        goto done;
+    } else {
+
+    }
+
     posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
   }
   r = do_create(rbd, io_ctx, imgname, size, order, format, features,
@@ -1667,8 +1758,48 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
     goto done;
   }
 
+  // parse header befor we read body
+  while (with_snap) {
+    string snapname;
+    __u8 tag;
+    r = safe_read_exact(fd, &tag, 1);
+    if (r < 0) {
+      goto done;
+    }
+    if (tag == 's') {
+      r = read_string(fd, 4096, &snapname);
+      if (r < 0)
+	    goto done;
+      snapnames.push_back(snapname);
+    }else if (tag == 'b') {
+      char buf[8];
+      r = safe_read_exact(fd, buf, 8);
+      if (r < 0)
+	    goto done;
+      bufferlist bl;
+      bl.append(buf, 8);
+      bufferlist::iterator p = bl.begin();
+      ::decode(body_offset, p);
+    }else if (tag == 'e') {
+      break;
+    }
+  }
+
   // loop body handles 0 return, as we may have a block to flush
-  while ((readlen = ::read(fd, p + blklen, reqlen)) >= 0) {
+  while (true) {
+    if (with_snap) {
+      offset = ::lseek(fd, 0, SEEK_CUR);
+      if (offset == body_offset) {
+        break;
+      }
+      if ((offset + reqlen) > body_offset) {
+        reqlen = body_offset - offset;
+      }
+    }
+    readlen = ::read(fd, p + blklen, reqlen);
+    if (readlen < 0) {
+      break;
+    }
     blklen += readlen;
     // if read was short, try again to fill the block before writing
     if (readlen && ((size_t)readlen < reqlen)) {
@@ -1717,16 +1848,34 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
     }
   }
 
+  if (with_snap) {
+    int v_size = snapnames.size();
+    if (v_size > 0) {
+      // create the base snap
+      r = image.snap_create(snapnames.front());
+      if (r < 0) {
+        goto done;
+      }
+      if (v_size > 1) {
+        for (std::vector<librbd::snap_info_t>::iterator it = snapnames.begin() + 1;
+         it != snapnames.end(); ++it) {
+          r = do_import(image, pc, fd, size);
+          if (r < 0)
+            goto done;
+        }
+      }
+    }
+  }
+
   r = image.close();
 
  done:
-  if (!from_stdin) {
-    if (r < 0)
-      pc.fail();
-    else
-      pc.finish();
+  if (r < 0)
+    pc.fail();
+  else
+    pc.finish();
+  if (!from_stdin)
     close(fd);
-  }
  done2:
   delete[] p;
   return r;
@@ -1756,31 +1905,12 @@ static int read_string(int fd, unsigned max, string *out)
   return len;
 }
 
-static int do_import_diff(librbd::Image &image, const char *path)
+static int do_import_diff(librbd::Image &image,  MyProgressContext &pc, int fd,
+                          int size);
 {
-  int fd, r;
-  struct stat stat_buf;
-  MyProgressContext pc("Importing image diff");
-  uint64_t size = 0;
+  int r;
   uint64_t off = 0;
   string from, to;
-
-  bool from_stdin = !strcmp(path, "-");
-  if (from_stdin) {
-    fd = 0;
-  } else {
-    fd = open(path, O_RDONLY);
-    if (fd < 0) {
-      r = -errno;
-      cerr << "rbd: error opening " << path << std::endl;
-      return r;
-    }
-    r = ::fstat(fd, &stat_buf);
-    if (r < 0)
-      goto done;
-    size = (uint64_t)stat_buf.st_size;
-  }
-
   char buf[strlen(RBD_DIFF_BANNER) + 1];
   r = safe_read_exact(fd, buf, strlen(RBD_DIFF_BANNER));
   if (r < 0)
@@ -1892,6 +2022,35 @@ static int do_import_diff(librbd::Image &image, const char *path)
     dout(2) << " create end snap " << to << dendl;
     r = image.snap_create(to.c_str());
   }
+
+ done:
+  return r;
+}
+
+static int do_import_diff(librbd::Image &image, const char *path)
+{
+  int fd, r;
+  struct stat stat_buf;
+  MyProgressContext pc("Importing image diff");
+  uint64_t size = 0;
+
+  bool from_stdin = !strcmp(path, "-");
+  if (from_stdin) {
+    fd = 0;
+  } else {
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+      r = -errno;
+      cerr << "rbd: error opening " << path << std::endl;
+      return r;
+    }
+    r = ::fstat(fd, &stat_buf);
+    if (r < 0)
+      goto done;
+    size = (uint64_t)stat_buf.st_size;
+  }
+
+  r = import_diff(image, pc, fd, size);
 
  done:
   if (r < 0)
@@ -2346,7 +2505,7 @@ public:
     bufferlist reply;
     m_io_ctx.notify_ack(m_header_oid, notify_id, cookie, reply);
   }
-  
+
   virtual void handle_error(uint64_t cookie, int err) {
     cerr << m_image_name << " received error: cookie=" << cookie << ", err="
 	 << cpp_strerror(err) << std::endl;
@@ -3078,6 +3237,7 @@ int main(int argc, const char **argv)
   string bench_pattern = "seq";
   bool diff_whole_object = false;
   bool input_feature = false;
+  bool export_with_snap = false;
 
   std::string val, parse_err;
   std::ostringstream err;
@@ -3130,9 +3290,9 @@ int main(int argc, const char **argv)
         return EXIT_FAILURE;
       }
       //NOTE: We can remove below given three lines of code once all applications,
-      //which use this CLI will adopt B/K/M/G/T/P/E with size value 
+      //which use this CLI will adopt B/K/M/G/T/P/E with size value
       sizell = atoll(sizeval);
-      if (size == sizell) 
+      if (size == sizell)
         size = size << 20;   // Default MB to Bytes
       size_set = true;
     } else if (ceph_argparse_flag(args, i, "-l", "--long", (char*)NULL)) {
@@ -3240,6 +3400,8 @@ int main(int argc, const char **argv)
       }
     } else if (ceph_argparse_flag(args, i, "--whole-object", (char *)NULL)) {
       diff_whole_object = true;
+    } else if (ceph_argparse_flag(args, i, "--with-snap", (char *)NULL)){
+      export_with_snap = true;
     } else if (ceph_argparse_binary_flag(args, i, &pretty_format, NULL, "--pretty-format", (char*)NULL)) {
     } else {
       ++i;
@@ -3890,7 +4052,7 @@ if (!set_conf_param(v, p1, p2, p3)) { \
     break;
 
   case OPT_EXPORT:
-    r = do_export(image, path);
+    r = do_export(image, path, export_with_snap);
     if (r < 0) {
       cerr << "rbd: export error: " << cpp_strerror(-r) << std::endl;
       return -r;
