@@ -1741,7 +1741,7 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
     if (r < 0)
       goto done;
     buf[strlen(RBD_WITH_SNAP_BANNER)] = '\0';
-    if (!strcmp(buf, RBD_WITH_SNAP_BANNER)) {
+    if (strcmp(buf, RBD_WITH_SNAP_BANNER)) {
       with_snap = false;
       r = ::lseek(fd, 0, SEEK_SET);
       if (r < 0)
