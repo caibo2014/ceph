@@ -96,7 +96,7 @@ static int do_import_diff(librbd::Image &image, MyProgressContext &pc, int fd,
 static int do_export_diff(librbd::Image& image, ExportContext& ec,
                           librbd::image_info_t& info, const char *fromsnapname,
                           const char *endsnapname, bool whole_object,
-                          int fd)
+                          int fd);
 
 void usage()
 {
